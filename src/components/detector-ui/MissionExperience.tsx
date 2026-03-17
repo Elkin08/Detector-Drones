@@ -1,11 +1,52 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 type View = "home" | "detection" | "tracking";
+type LocationPoint = { x: number; y: number; time: string };
 
 export const MissionExperience = () => {
   const [view, setView] = useState<View>("home");
   const [signalLost, setSignalLost] = useState(false);
+  const [locationHistory, setLocationHistory] = useState<LocationPoint[]>([]);
+  const prevSignalLostRef = useRef(false);
+
+  // Simulación de posiciones para el historial
+  const positions = [
+    { x: 8, y: 80 },
+    { x: 18, y: 68 },
+    { x: 30, y: 70 },
+    { x: 42, y: 58 },
+    { x: 52, y: 62 },
+    { x: 64, y: 48 },
+    { x: 74, y: 52 },
+    { x: 88, y: 35 },
+  ];
+
+  // Agregar ubicación solo cuando se pierda la conexión
+  useEffect(() => {
+    if (view !== "tracking") return;
+
+    // Detectar cambio de signalLost de false a true
+    if (signalLost && !prevSignalLostRef.current) {
+      const randomPos = positions[Math.floor(Math.random() * positions.length)];
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("es-ES", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+
+      setLocationHistory((prev) => {
+        const updated = [
+          { x: randomPos.x, y: randomPos.y, time: timeStr },
+          ...prev,
+        ];
+        return updated.slice(0, 8); // Mantener máximo 8 ubicaciones
+      });
+    }
+
+    prevSignalLostRef.current = signalLost;
+  }, [signalLost, view]);
 
   return (
     <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 pb-12 pt-8 sm:gap-6 sm:px-5 sm:pb-16 sm:pt-10 md:px-8">
@@ -159,32 +200,89 @@ export const MissionExperience = () => {
               </div>
             </div>
 
-            <div className="bg-map-grid relative h-[360px] overflow-hidden rounded-2xl border border-cyan-500/30">
-              <svg
-                className="absolute inset-0 h-full w-full"
-                viewBox="0 0 100 100"
-                preserveAspectRatio="none"
-              >
-                <polyline
-                  points="8,80 18,68 30,70 42,58 52,62 64,48 74,52 88,35"
-                  fill="none"
-                  stroke="rgba(34,211,238,0.7)"
-                  strokeWidth="0.7"
-                  strokeDasharray="2 2"
-                />
-              </svg>
+            <div className="grid gap-6 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <div className="bg-map-grid relative h-[360px] overflow-hidden rounded-2xl border border-cyan-500/30">
+                  <svg
+                    className="absolute inset-0 h-full w-full"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    <polyline
+                      points="8,80 18,68 30,70 42,58 52,62 64,48 74,52 88,35"
+                      fill="none"
+                      stroke="rgba(34,211,238,0.7)"
+                      strokeWidth="0.7"
+                      strokeDasharray="2 2"
+                    />
+                  </svg>
 
-              <motion.div
-                className="absolute h-4 w-4 rounded-full bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.95)]"
-                animate={{
-                  left: ["8%", "18%", "30%", "42%", "52%", "64%", "74%", "88%"],
-                  top: ["80%", "68%", "70%", "58%", "62%", "48%", "52%", "35%"],
-                }}
-                transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-              />
+                  <motion.div
+                    className="absolute h-4 w-4 rounded-full bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.95)]"
+                    animate={{
+                      left: [
+                        "8%",
+                        "18%",
+                        "30%",
+                        "42%",
+                        "52%",
+                        "64%",
+                        "74%",
+                        "88%",
+                      ],
+                      top: [
+                        "80%",
+                        "68%",
+                        "70%",
+                        "58%",
+                        "62%",
+                        "48%",
+                        "52%",
+                        "35%",
+                      ],
+                    }}
+                    transition={{
+                      duration: 8,
+                      repeat: Infinity,
+                      ease: "linear",
+                    }}
+                  />
 
-              <div className="absolute bottom-3 left-3 rounded-md border border-zinc-700 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-200">
-                Señal: {signalLost ? "Perdida" : "Estable"}
+                  <div className="absolute bottom-3 left-3 rounded-md border border-zinc-700 bg-zinc-950/80 px-3 py-2 text-xs text-zinc-200">
+                    Señal: {signalLost ? "Perdida" : "Estable"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-cyan-400/25 bg-zinc-950/60 p-4">
+                <p className="mb-3 text-xs uppercase tracking-[0.2em] text-cyan-300/80">
+                  Historial de Ubicación
+                </p>
+                <div className="flex max-h-[360px] flex-col gap-2 overflow-y-auto">
+                  {locationHistory.length === 0 ? (
+                    <p className="text-xs italic text-zinc-500">
+                      Esperando ubicaciones...
+                    </p>
+                  ) : (
+                    locationHistory.map((loc, idx) => (
+                      <motion.div
+                        key={`${loc.time}-${idx}`}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="rounded-md border border-cyan-500/30 bg-zinc-900/50 p-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-cyan-300">
+                            ({loc.x}%, {loc.y}%)
+                          </span>
+                          <span className="text-[10px] text-zinc-400">
+                            {loc.time}
+                          </span>
+                        </div>
+                      </motion.div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
 
