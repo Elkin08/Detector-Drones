@@ -1,0 +1,26 @@
+# Robots.txt para GlowFinder
+# http://localhost:3000
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /_next/
+Disallow: /static/
+
+# Sitemap
+Sitemap: http://localhost:3000/sitemap.xml
+
+# Googlebot
+User-agent: Googlebot
+Allow: /
+
+# Bingbot
+User-agent: Bingbot
+Allow: /
+
+# Yahoo
+User-agent: Slurp
+Allow: /
+
+# Crawl-delay para evitar sobrecarga del servidor
+Crawl-delay: 1
