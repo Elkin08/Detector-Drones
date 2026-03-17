@@ -1,33 +1,28 @@
 // Configuración SEO centralizada
 export const siteConfig = {
-  name: "GlowFinder",
-  title: "GlowFinder - Directorio de Clínicas Estéticas y Gift Cards",
+  name: "Detector de Drones",
+  title: "Detector de Drones - Demo de Detección y Seguimiento",
   description:
-    "Descubre las mejores clínicas estéticas y centros de belleza. Compra gift cards para tratamientos de belleza, spa y bienestar. Sistema seguro con códigos QR únicos.",
-  url: "https://www.glowfinder.com",
+    "Plataforma demo para simular detección de drones en red local, escaneo táctico y seguimiento en tiempo real.",
+  url: "https://detector-drones.local",
   locale: "es_CO",
-  siteName: "GlowFinder",
+  siteName: "Detector de Drones",
   keywords: [
-    "clínicas estéticas",
-    "gift cards",
-    "centros de belleza",
-    "spa",
-    "tratamientos estéticos",
-    "Colombia",
-    "tarjetas regalo",
-    "bienestar",
-    "código QR",
-    "gift cards digitales",
-    "clínicas spa",
-    "tratamientos faciales",
-    "estética",
-    "belleza",
-    "cuidado personal",
+    "detector de drones",
+    "rastreo en tiempo real",
+    "radar táctico",
+    "seguridad perimetral",
+    "simulación de detección",
+    "next.js",
+    "react",
+    "telemetría",
+    "seguimiento de objetivos",
+    "vigilancia tecnológica",
   ],
   social: {
-    whatsapp: "573106138120",
+    whatsapp: "",
   },
-  ogImage: "/og-image.jpg", // Deberás crear esta imagen
+  ogImage: "/og-image.jpg",
 };
 
 export const generateMetaTags = (options?: {

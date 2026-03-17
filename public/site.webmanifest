@@ -1,11 +1,11 @@
 {
-  "name": "GlowFinder",
-  "short_name": "GlowFinder",
-  "description": "Gift Cards para Clínicas de Estética y Belleza",
+  "name": "Detector de Drones",
+  "short_name": "Drones",
+  "description": "Demo táctica de detección y seguimiento de drones en tiempo real",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#c41e3a",
+  "background_color": "#02040f",
+  "theme_color": "#ef4444",
   "orientation": "portrait-primary",
   "icons": [
     {
@@ -24,6 +24,6 @@
       "type": "image/png"
     }
   ],
-  "categories": ["entertainment", "music", "events"],
+  "categories": ["security", "utilities", "technology"],
   "lang": "es-CO"
 }

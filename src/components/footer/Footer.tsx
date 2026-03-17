@@ -2,43 +2,44 @@ import React from "react";
 import { SiInstagram, SiX, SiYoutube } from "react-icons/si";
 import { IconType } from "react-icons";
 import Link from "next/link";
-import { LogoSmall } from "../navigation/Logo";
-import { NAV_LINKS } from "../navigation/constants";
 
 export const Footer = () => {
   return (
-    <div className="bg-white">
-      <footer className="relative mx-auto max-w-6xl overflow-hidden py-12">
-        <div className="md:px4 grid grid-cols-12 gap-x-1.5 gap-y-6 px-2">
+    <div className="border-t border-red-500/20 bg-zinc-950/95">
+      <footer className="relative mx-auto max-w-6xl overflow-hidden py-12 text-zinc-200">
+        <div className="grid grid-cols-12 gap-x-3 gap-y-6 px-4 md:px-6">
           <LogoColumn />
-          <GenericColumn title="Product" links={NAV_LINKS[0].sublinks} />
           <GenericColumn
-            title="Company"
-            links={[...NAV_LINKS[3].sublinks, ...NAV_LINKS[4].sublinks]}
+            title="Sistema"
+            links={[
+              { title: "Panel de Misión", href: "/" },
+              { title: "Modo Detección", href: "/" },
+              { title: "Seguimiento", href: "/" },
+            ]}
           />
           <GenericColumn
-            title="Legal"
+            title="Proyecto"
             links={[
               {
-                title: "Terms & Conditions",
-                href: "/#",
+                title: "Arquitectura",
+                href: "/",
               },
               {
-                title: "Privacy Policy",
-                href: "/#",
+                title: "Roadmap",
+                href: "/",
               },
               {
-                title: "Refund Policy",
-                href: "/#",
+                title: "Contacto Técnico",
+                href: "/",
               },
             ]}
           />
 
           <GenericColumn
-            title="Socials"
+            title="Canales"
             links={[
               {
-                title: "Twitter",
+                title: "X",
                 href: "/#",
                 Icon: SiX,
               },
@@ -63,9 +64,14 @@ export const Footer = () => {
 const LogoColumn = () => {
   return (
     <div className="col-span-6 md:col-span-4">
-      <LogoSmall />
-      <span className="mt-3 inline-block text-xs">
-        © Hover.dev - All rights reserved.
+      <span className="inline-block text-lg font-black tracking-wider text-red-500">
+        DETECTOR DE DRONES
+      </span>
+      <span className="mt-3 block text-xs text-zinc-400">
+        Centro táctico de detección y rastreo en tiempo real.
+      </span>
+      <span className="mt-1 inline-block text-xs text-zinc-500">
+        © 2026 Detector de Drones
       </span>
     </div>
   );
@@ -80,12 +86,12 @@ const GenericColumn = ({
 }) => {
   return (
     <div className="col-span-6 space-y-2 text-sm md:col-span-2">
-      <span className="block font-bold">{title}</span>
+      <span className="block font-bold text-cyan-300">{title}</span>
       {links.map((l) => (
         <Link
           key={l.title}
           href={l.href}
-          className="flex items-center gap-1.5 transition-colors hover:text-indigo-600 hover:underline"
+          className="flex items-center gap-1.5 text-zinc-300 transition-colors hover:text-red-400 hover:underline"
         >
           {l.Icon && <l.Icon />}
           {l.title}
