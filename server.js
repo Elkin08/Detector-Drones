@@ -1,146 +1,232 @@
-const { createSecureServer } = require("http2");
-const { createServer } = require("https");
-const { readFileSync } = require("fs");
-const { join } = require("path");
+const fs = require("fs");
+const https = require("https");
+const os = require("os");
 const { parse } = require("url");
 const next = require("next");
-const { Server } = require("socket.io");
 
 const dev = process.env.NODE_ENV !== "production";
-const app = next({ dev });
-const handle = app.getRequestHandler();
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const nextApp = next({ dev });
+const handle = nextApp.getRequestHandler();
+const BASE_PORT = parseInt(process.env.PORT || "3000", 10);
+const MAX_PORT_RETRIES = 20;
 
-// Cargar certificados SSL
-const sslOptions = {
-  key: readFileSync(join(__dirname, "certs", "key.pem")),
-  cert: readFileSync(join(__dirname, "certs", "cert.pem")),
-};
+// Socket.IO para rastreo en tiempo real
+const { Server } = require("socket.io");
 
-// Mapeo de dispositivos conectados
+// Mapeo de dispositivos
 const connectedDevices = new Map();
-
-// Timeout para detectar pérdida de señal (15 segundos - más tolerante)
-const SIGNAL_TIMEOUT = 15000;
+const SIGNAL_TIMEOUT = 45000;
+const DISCONNECT_GRACE_MS = 20000;
 const signalTimeouts = new Map();
+const disconnectGraceTimeouts = new Map();
 
-app.prepare().then(() => {
-  const httpsServer = createServer(sslOptions, (req, res) => {
-    const parsedUrl = parse(req.url, true);
-    handle(req, res, parsedUrl);
-  });
+function refreshSignalTimeout(io, deviceId) {
+  if (signalTimeouts.has(deviceId)) {
+    clearTimeout(signalTimeouts.get(deviceId));
+  }
 
-  const io = new Server(httpsServer, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"],
-    },
-  });
+  const timeout = setTimeout(() => {
+    console.log(`[WS] Pérdida de señal: ${deviceId}`);
+    io.emit("device:signal_lost", deviceId);
+  }, SIGNAL_TIMEOUT);
 
-  io.on("connection", (socket) => {
-    console.log(`[WS] Nuevo cliente conectado: ${socket.id}`);
+  signalTimeouts.set(deviceId, timeout);
+}
 
-    // Evento: dispositivo móvil se conecta como dron
-    socket.on("device:register", (data) => {
-      const { deviceId } = data;
-      console.log(`[WS] Dispositivo registrado: ${deviceId}`);
+function clearDeviceTimeouts(deviceId) {
+  if (signalTimeouts.has(deviceId)) {
+    clearTimeout(signalTimeouts.get(deviceId));
+    signalTimeouts.delete(deviceId);
+  }
 
-      connectedDevices.set(deviceId, {
-        socketId: socket.id,
-        lastUpdate: Date.now(),
-      });
+  if (disconnectGraceTimeouts.has(deviceId)) {
+    clearTimeout(disconnectGraceTimeouts.get(deviceId));
+    disconnectGraceTimeouts.delete(deviceId);
+  }
+}
 
-      // Broadcast: nuevo dispositivo conectado
-      io.emit("device:connected", deviceId);
+function getLocalIPv4Addresses() {
+  const nets = os.networkInterfaces();
+  const addresses = [];
 
-      // Limpiar timeout anterior si existe
-      if (signalTimeouts.has(deviceId)) {
-        clearTimeout(signalTimeouts.get(deviceId));
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        addresses.push(net.address);
       }
+    }
+  }
+
+  return addresses;
+}
+
+nextApp
+  .prepare()
+  .then(() => {
+    // Leer certificados SSL
+    let httpsOptions = null;
+    try {
+      httpsOptions = {
+        key: fs.readFileSync("./certs/key.pem", "utf8"),
+        cert: fs.readFileSync("./certs/cert.pem", "utf8"),
+      };
+      console.log("✓ Certificados SSL cargados correctamente");
+    } catch (err) {
+      console.error("⚠ Error al leer certificados SSL:", err.message);
+      process.exit(1);
+    }
+
+    // Crear servidor HTTPS
+    const server = https.createServer(httpsOptions, (req, res) => {
+      const parsedUrl = parse(req.url, true);
+      handle(req, res, parsedUrl);
     });
 
-    // Evento: recibir ubicación del dispositivo
-    socket.on("device:location", (data) => {
-      const { deviceId, latitude, longitude } = data;
-      const timestamp = Date.now();
+    let currentPort = BASE_PORT;
 
-      // Actualizar último tiempo conocido
-      const devInfo = connectedDevices.get(deviceId);
-      if (devInfo) {
-        devInfo.lastUpdate = timestamp;
-      }
-
-      // Limpiar timeout anterior
-      if (signalTimeouts.has(deviceId)) {
-        clearTimeout(signalTimeouts.get(deviceId));
-      }
-
-      // Broadcast ubicación a todos los clientes
-      io.emit("location:update", {
-        deviceId,
-        latitude,
-        longitude,
-        timestamp,
-      });
-
-      // Configurar nuevo timeout para detectar pérdida de señal
-      const timeout = setTimeout(() => {
-        console.log(`[WS] Pérdida de señal detectada: ${deviceId}`);
-        io.emit("device:signal_lost", deviceId);
-
-        // Intentar reconexión automática después de 30s
-        const reconnectTimeout = setTimeout(() => {
-          console.log(`[WS] Intento de reconexión: ${deviceId}`);
-          io.emit("device:signal_reconnecting", deviceId);
-        }, 30000);
-
-        signalTimeouts.set(`${deviceId}_reconnect`, reconnectTimeout);
-      }, SIGNAL_TIMEOUT);
-
-      signalTimeouts.set(deviceId, timeout);
+    // Configurar Socket.IO
+    const io = new Server(server, {
+      cors: { origin: "*", methods: ["GET", "POST"] },
     });
 
-    // Evento: dispositivo se desconecta
-    socket.on("device:disconnect_request", (data) => {
-      const { deviceId } = data;
-      console.log(`[WS] Dispositivo desconectado: ${deviceId}`);
+    io.on("connection", (socket) => {
+      console.log(`[WS] Nuevo cliente: ${socket.id}`);
 
-      connectedDevices.delete(deviceId);
+      socket.on("device:register", (data) => {
+        const { deviceId } = data;
+        if (!deviceId) return;
 
-      if (signalTimeouts.has(deviceId)) {
-        clearTimeout(signalTimeouts.get(deviceId));
-        signalTimeouts.delete(deviceId);
-      }
+        console.log(`[WS] Dispositivo registrado: ${deviceId}`);
 
-      io.emit("device:disconnected", deviceId);
-    });
-
-    socket.on("disconnect", () => {
-      console.log(`[WS] Cliente desconectado: ${socket.id}`);
-
-      // Buscar y limpiar dispositivo asociado
-      for (const [deviceId, devInfo] of connectedDevices.entries()) {
-        if (devInfo.socketId === socket.id) {
-          connectedDevices.delete(deviceId);
-          io.emit("device:disconnected", deviceId);
-
-          if (signalTimeouts.has(deviceId)) {
-            clearTimeout(signalTimeouts.get(deviceId));
-            signalTimeouts.delete(deviceId);
-          }
-          break;
+        if (disconnectGraceTimeouts.has(deviceId)) {
+          clearTimeout(disconnectGraceTimeouts.get(deviceId));
+          disconnectGraceTimeouts.delete(deviceId);
         }
-      }
-    });
-  });
 
-  httpsServer.listen(PORT, (err) => {
-    if (err) throw err;
-    console.log(`✓ Servidor HTTPS corriendo en https://localhost:${PORT}`);
-    console.log(`✓ WebSocket Socket.IO escuchando conexiones...`);
-    console.log(`⚠️  Acceso desde red: https://<TU_IP>:${PORT}`);
-    console.log(
-      `⚠️  Certificado autofirmado: accede y acepta la advertencia del navegador`
-    );
+        connectedDevices.set(deviceId, {
+          socketId: socket.id,
+          lastUpdate: Date.now(),
+        });
+
+        io.emit("device:connected", deviceId);
+        refreshSignalTimeout(io, deviceId);
+      });
+
+      socket.on("device:heartbeat", (data) => {
+        const { deviceId } = data || {};
+        if (!deviceId) return;
+
+        const devInfo = connectedDevices.get(deviceId);
+        if (devInfo) {
+          devInfo.lastUpdate = Date.now();
+        }
+
+        refreshSignalTimeout(io, deviceId);
+      });
+
+      socket.on("device:location", (data) => {
+        const { deviceId, latitude, longitude } = data;
+        if (!deviceId) return;
+
+        const timestamp = Date.now();
+
+        const devInfo = connectedDevices.get(deviceId);
+        if (devInfo) {
+          devInfo.socketId = socket.id;
+          devInfo.lastUpdate = timestamp;
+        } else {
+          connectedDevices.set(deviceId, {
+            socketId: socket.id,
+            lastUpdate: timestamp,
+          });
+        }
+
+        io.emit("location:update", {
+          deviceId,
+          latitude,
+          longitude,
+          timestamp,
+        });
+
+        refreshSignalTimeout(io, deviceId);
+      });
+
+      socket.on("device:disconnect_request", (data) => {
+        const { deviceId } = data;
+        if (!deviceId) return;
+
+        connectedDevices.delete(deviceId);
+        clearDeviceTimeouts(deviceId);
+        io.emit("device:disconnected", deviceId);
+      });
+
+      socket.on("disconnect", () => {
+        console.log(`[WS] Cliente desconectado: ${socket.id}`);
+        for (const [deviceId, devInfo] of connectedDevices.entries()) {
+          if (devInfo.socketId === socket.id) {
+            io.emit("device:signal_reconnecting", deviceId);
+
+            if (disconnectGraceTimeouts.has(deviceId)) {
+              clearTimeout(disconnectGraceTimeouts.get(deviceId));
+            }
+
+            const timeout = setTimeout(() => {
+              const current = connectedDevices.get(deviceId);
+              if (current && current.socketId === socket.id) {
+                connectedDevices.delete(deviceId);
+                clearDeviceTimeouts(deviceId);
+                io.emit("device:disconnected", deviceId);
+              }
+            }, DISCONNECT_GRACE_MS);
+
+            disconnectGraceTimeouts.set(deviceId, timeout);
+            break;
+          }
+        }
+      });
+    });
+
+    const startServer = () => {
+      server.listen(currentPort, "0.0.0.0", () => {
+        const localIPs = getLocalIPv4Addresses();
+
+        console.log(`\n✓ SERVIDOR HTTPS EJECUTÁNDOSE`);
+        console.log(`✓ PC: https://localhost:${currentPort}`);
+        if (localIPs.length > 0) {
+          for (const ip of localIPs) {
+            console.log(
+              `✓ CELULAR (${ip}): https://${ip}:${currentPort}/mobile-tracker`
+            );
+          }
+        } else {
+          console.log(`⚠ No se detectaron IPs de red local automáticamente`);
+        }
+        console.log(`✓ Escuchando en TODAS las redes (0.0.0.0:${currentPort})`);
+        console.log(`✓ WebSocket escuchando...`);
+        console.log(`⚠ Acepta el certificado autofirmado en el navegador\n`);
+      });
+    };
+
+    startServer();
+
+    server.on("error", (err) => {
+      if (
+        err &&
+        err.code === "EADDRINUSE" &&
+        currentPort < BASE_PORT + MAX_PORT_RETRIES
+      ) {
+        currentPort += 1;
+        console.warn(
+          `⚠ Puerto ocupado, reintentando en https://localhost:${currentPort}`
+        );
+        startServer();
+        return;
+      }
+      console.error("Error del servidor:", err);
+      process.exit(1);
+    });
+  })
+  .catch((err) => {
+    console.error("Error al preparar Next.js:", err);
+    process.exit(1);
   });
-});

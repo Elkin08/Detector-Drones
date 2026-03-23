@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import dynamic from "next/dynamic";
 import { useLocation } from "@/context/LocationContext";
@@ -17,11 +17,17 @@ const MapViewer = dynamic(
 );
 
 type View = "home" | "detection" | "tracking";
-type LocationPoint = { x: number; y: number; time: string };
+
+type FocusPoint = {
+  latitude: number;
+  longitude: number;
+  label?: string;
+};
 
 export const MissionExperience = () => {
   const [view, setView] = useState<View>("home");
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [focusedPoint, setFocusedPoint] = useState<FocusPoint | null>(null);
   const [signalLostAlert, setSignalLostAlert] = useState<{
     deviceId: string;
     latitude: number;
@@ -37,18 +43,41 @@ export const MissionExperience = () => {
     }>
   >([]);
   const { devices } = useLocation();
-  const prevDeviceCountRef = useRef(0);
   const prevDevicesRef = useRef<Map<string, Device>>(new Map());
 
-  // Auto ir al mapa cuando se detecta el primer dispositivo
-  useEffect(() => {
-    if (devices.size > 0 && prevDeviceCountRef.current === 0) {
-      setView("tracking");
-      const firstDevice = Array.from(devices.values())[0];
-      setSelectedDeviceId(firstDevice.id);
+  const sortedDevices = useMemo(
+    () =>
+      Array.from(devices.values()).sort((a, b) => {
+        if (a.detectionTime !== b.detectionTime) {
+          return a.detectionTime - b.detectionTime;
+        }
+        return a.id.localeCompare(b.id);
+      }),
+    [devices]
+  );
+
+  const deviceAliases = useMemo(() => {
+    const aliases = new Map<string, string>();
+    sortedDevices.forEach((device, idx) => {
+      aliases.set(device.id, `Dron ${idx + 1}`);
+    });
+    return aliases;
+  }, [sortedDevices]);
+
+  const selectedDevice =
+    selectedDeviceId && !selectedDeviceId.startsWith("__")
+      ? devices.get(selectedDeviceId) || null
+      : null;
+
+  const getRealtimeDeviceId = () => {
+    const connectedDevice = sortedDevices.find(
+      (d) => d.signalStatus === "connected"
+    );
+    if (connectedDevice) {
+      return connectedDevice.id;
     }
-    prevDeviceCountRef.current = devices.size;
-  }, [devices.size]);
+    return "__devices";
+  };
 
   // Detectar cambios de estado y agregar al historial
   useEffect(() => {
@@ -73,6 +102,11 @@ export const MissionExperience = () => {
         prevDevice.signalStatus !== "lost" &&
         device.signalStatus === "lost"
       ) {
+        setSignalLostAlert({
+          deviceId: device.id,
+          latitude: device.latitude,
+          longitude: device.longitude,
+        });
         setDetectionHistory((prev) => [
           ...prev,
           {
@@ -104,22 +138,6 @@ export const MissionExperience = () => {
 
     // Actualizar mapa anterior
     prevDevicesRef.current = new Map(devices);
-  }, [devices]);
-
-  // Detectar cuando se pierde señal y mostrar aviso
-  useEffect(() => {
-    const lostDevices = Array.from(devices.values()).filter(
-      (d) => d.signalStatus === "lost"
-    );
-
-    if (lostDevices.length > 0) {
-      const device = lostDevices[0];
-      setSignalLostAlert({
-        deviceId: device.id,
-        latitude: device.latitude,
-        longitude: device.longitude,
-      });
-    }
   }, [devices]);
 
   return (
@@ -196,12 +214,13 @@ export const MissionExperience = () => {
 
                 {/* Mostrar dispositivos detectados en el radar */}
                 {devices.size > 0 ? (
-                  Array.from(devices.values()).map((device, index) => {
+                  sortedDevices.map((device, index) => {
                     // Calcular posición en el radar (ángulo basado en índice)
                     const angle = (index * 360) / Math.max(devices.size, 1);
                     const radius = 60; // píxeles del centro
                     const x = Math.cos((angle * Math.PI) / 180) * radius;
                     const y = Math.sin((angle * Math.PI) / 180) * radius;
+                    const alias = deviceAliases.get(device.id) || "Dron";
 
                     const isConnected = device.signalStatus === "connected";
                     const dotColor = isConnected ? "#06b6d4" : "#ef4444";
@@ -227,11 +246,15 @@ export const MissionExperience = () => {
                             cursor: "pointer",
                           }}
                           onClick={() => {
+                            setFocusedPoint(null);
                             setSelectedDeviceId(device.id);
                             setView("tracking");
                           }}
-                          title={`${device.id.slice(0, 8)} - ${device.signalStatus}`}
+                          title={`${alias} · ${device.signalStatus} · ID ${device.id.slice(0, 8)}`}
                         />
+                        <p className="mt-1 text-center text-[10px] font-semibold text-cyan-200">
+                          {alias}
+                        </p>
                       </motion.div>
                     );
                   })
@@ -270,20 +293,16 @@ export const MissionExperience = () => {
                 <div className="mt-2 flex flex-wrap gap-3">
                   {devices.size > 0 && (
                     <button
-                      onClick={() => setView("tracking")}
+                      onClick={() => {
+                        setFocusedPoint(null);
+                        setSelectedDeviceId(getRealtimeDeviceId());
+                        setView("tracking");
+                      }}
                       className="rounded-md border border-green-400 bg-green-500/20 px-5 py-2 text-sm font-semibold text-green-100 transition hover:scale-[1.03] hover:bg-green-500/30"
                     >
                       ✓ Ver en el mapa
                     </button>
                   )}
-                  <button
-                    onClick={() => {
-                      setView("tracking");
-                    }}
-                    className="rounded-md border border-cyan-300 bg-cyan-300/20 px-5 py-2 text-sm font-semibold text-cyan-100 transition hover:scale-[1.03] hover:bg-cyan-300/30"
-                  >
-                    Objetivo detectado
-                  </button>
                   <button
                     onClick={() => setView("home")}
                     className="rounded-md border border-zinc-600 bg-zinc-800 px-5 py-2 text-sm font-semibold text-zinc-200 transition hover:border-red-400 hover:text-red-300"
@@ -326,7 +345,10 @@ export const MissionExperience = () => {
 
             <div className="grid gap-6 lg:grid-cols-3">
               <div className="h-[400px] lg:col-span-2">
-                <MapViewer />
+                <MapViewer
+                  focusedPoint={focusedPoint}
+                  selectedDeviceId={selectedDeviceId}
+                />
               </div>
 
               {/* Panel de Dispositivos e Historial con pestañas */}
@@ -362,7 +384,7 @@ export const MissionExperience = () => {
                         Esperando conexión de celulares...
                       </p>
                     ) : (
-                      Array.from(devices.values()).map((device) => (
+                      sortedDevices.map((device) => (
                         <motion.div
                           key={device.id}
                           initial={{ opacity: 0, x: -10 }}
@@ -376,9 +398,9 @@ export const MissionExperience = () => {
                           }`}
                           onClick={() => setSelectedDeviceId(device.id)}
                         >
-                          <div className="flex items-center justify-between font-mono">
+                          <div className="flex items-center justify-between">
                             <span className="text-cyan-300">
-                              {device.id.slice(0, 8)}
+                              {deviceAliases.get(device.id) || "Dron"}
                             </span>
                             <span
                               className={`h-2 w-2 rounded-full ${
@@ -391,6 +413,7 @@ export const MissionExperience = () => {
                             />
                           </div>
                           <div className="mt-1 text-[10px] text-zinc-400">
+                            <p>ID resumido: {device.id.slice(0, 8)}</p>
                             <p>Lat: {device.latitude.toFixed(4)}</p>
                             <p>Lng: {device.longitude.toFixed(4)}</p>
                             <p className="mt-1 text-zinc-500">
@@ -426,7 +449,30 @@ export const MissionExperience = () => {
                               : entry.action === "lost"
                                 ? "border-red-400/40 bg-red-950/30"
                                 : "border-blue-400/40 bg-blue-950/30"
+                          } ${
+                            entry.action === "lost" &&
+                            typeof entry.latitude === "number" &&
+                            typeof entry.longitude === "number"
+                              ? "cursor-pointer hover:border-red-300 hover:bg-red-950/45"
+                              : ""
                           }`}
+                          onClick={() => {
+                            if (
+                              entry.action !== "lost" ||
+                              typeof entry.latitude !== "number" ||
+                              typeof entry.longitude !== "number"
+                            ) {
+                              return;
+                            }
+
+                            setFocusedPoint({
+                              latitude: entry.latitude,
+                              longitude: entry.longitude,
+                              label: `Ultima señal ${entry.deviceId.slice(0, 8)}`,
+                            });
+                            setView("tracking");
+                            setSelectedDeviceId(entry.deviceId);
+                          }}
                         >
                           <div className="flex items-center justify-between">
                             <span className="font-semibold">
@@ -441,14 +487,23 @@ export const MissionExperience = () => {
                             </span>
                           </div>
                           <p className="mt-1 font-mono text-[10px] text-cyan-300">
+                            {deviceAliases.get(entry.deviceId) || "Dron"} · ID{" "}
                             {entry.deviceId.slice(0, 8)}
                           </p>
-                          {entry.latitude && entry.longitude && (
-                            <p className="mt-1 text-[10px] text-zinc-400">
-                              {entry.latitude.toFixed(4)},{" "}
-                              {entry.longitude.toFixed(4)}
-                            </p>
-                          )}
+                          {typeof entry.latitude === "number" &&
+                            typeof entry.longitude === "number" && (
+                              <p className="mt-1 text-[10px] text-zinc-400">
+                                {entry.latitude.toFixed(4)},{" "}
+                                {entry.longitude.toFixed(4)}
+                              </p>
+                            )}
+                          {entry.action === "lost" &&
+                            typeof entry.latitude === "number" &&
+                            typeof entry.longitude === "number" && (
+                              <p className="mt-1 text-[10px] text-red-300">
+                                Toca para ubicar en el mapa
+                              </p>
+                            )}
                         </motion.div>
                       ))
                     )}
@@ -456,6 +511,20 @@ export const MissionExperience = () => {
                 )}
               </div>
             </div>
+
+            {focusedPoint && (
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => {
+                    setFocusedPoint(null);
+                    setSelectedDeviceId(getRealtimeDeviceId());
+                  }}
+                  className="rounded-md border border-cyan-400 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
+                >
+                  Volver al tiempo real
+                </button>
+              </div>
+            )}
           </motion.article>
         )}
       </AnimatePresence>
@@ -488,7 +557,8 @@ export const MissionExperience = () => {
                   <p className="mt-2 text-sm text-zinc-300">
                     Se perdió la conexión con el dispositivo{" "}
                     <code className="text-cyan-300">
-                      {signalLostAlert.deviceId.slice(0, 8)}
+                      {deviceAliases.get(signalLostAlert.deviceId) ||
+                        signalLostAlert.deviceId.slice(0, 8)}
                     </code>
                   </p>
                   <p className="mt-2 text-xs text-zinc-400">

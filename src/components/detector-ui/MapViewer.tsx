@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useLocation } from "@/context/LocationContext";
@@ -19,13 +19,36 @@ interface MarkerRef {
   marker: L.Marker;
 }
 
-export const MapViewer = () => {
+type FocusPoint = {
+  latitude: number;
+  longitude: number;
+  label?: string;
+};
+
+export const MapViewer = ({
+  focusedPoint,
+  selectedDeviceId,
+}: {
+  focusedPoint?: FocusPoint | null;
+  selectedDeviceId?: string | null;
+}) => {
   const { devices } = useLocation();
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const circlesRef = useRef<Map<string, L.Circle>>(new Map());
   const polylinesRef = useRef<Map<string, L.Polyline>>(new Map());
+  const focusMarkerRef = useRef<L.CircleMarker | null>(null);
+  const hasInitialFitRef = useRef(false);
+  const previousSelectedDeviceIdRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedDevice = useMemo(() => {
+    if (!selectedDeviceId || selectedDeviceId.startsWith("__")) {
+      return null;
+    }
+    return devices.get(selectedDeviceId) || null;
+  }, [devices, selectedDeviceId]);
 
   // Inicializar mapa
   useEffect(() => {
@@ -39,17 +62,20 @@ export const MapViewer = () => {
       maxZoom: 19,
     }).addTo(mapRef.current);
 
+    setMapReady(true);
+
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
+      setMapReady(false);
     };
   }, []);
 
   // Actualizar marcadores cuando cambian los dispositivos
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !mapReady) return;
 
     const deviceIds = new Set(devices.keys());
     const markerIds = new Set(markersRef.current.keys());
@@ -143,6 +169,10 @@ export const MapViewer = () => {
       const existingCircle = circlesRef.current.get(device.id);
       if (existingCircle) {
         existingCircle.setLatLng([device.latitude, device.longitude]);
+        existingCircle.setStyle({
+          color: color,
+          fillColor: color,
+        });
       } else {
         const circle = L.circle([device.latitude, device.longitude], {
           radius: 50, // 50 metros de radio
@@ -179,17 +209,109 @@ export const MapViewer = () => {
       }
     });
 
-    // Ajustar vista del mapa si hay dispositivos
-    if (devices.size > 0 && mapRef.current) {
+    // Ajustar vista inicial solo una vez.
+    if (devices.size > 0 && mapRef.current && !hasInitialFitRef.current) {
+      if (devices.size === 1) {
+        const onlyDevice = Array.from(devices.values())[0];
+        mapRef.current.flyTo([onlyDevice.latitude, onlyDevice.longitude], 16, {
+          duration: 0.8,
+        });
+      } else {
+        const bounds = L.latLngBounds(
+          Array.from(devices.values()).map((d) => [d.latitude, d.longitude])
+        );
+        mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+      }
+      hasInitialFitRef.current = true;
+    }
+  }, [devices, mapReady]);
+
+  // Enfocar un punto específico (por ejemplo, desde historial de señal perdida)
+  useEffect(() => {
+    if (!mapRef.current || !focusedPoint) return;
+
+    const { latitude, longitude, label } = focusedPoint;
+    mapRef.current.flyTo([latitude, longitude], 16, { duration: 0.8 });
+
+    if (focusMarkerRef.current) {
+      mapRef.current.removeLayer(focusMarkerRef.current);
+      focusMarkerRef.current = null;
+    }
+
+    const marker = L.circleMarker([latitude, longitude], {
+      radius: 10,
+      color: "#ef4444",
+      fillColor: "#ef4444",
+      fillOpacity: 0.35,
+      weight: 2,
+    })
+      .bindPopup(label || "Ubicación seleccionada")
+      .addTo(mapRef.current);
+
+    marker.openPopup();
+    focusMarkerRef.current = marker;
+  }, [focusedPoint]);
+
+  useEffect(() => {
+    if (!mapRef.current || focusedPoint) return;
+
+    if (focusMarkerRef.current) {
+      mapRef.current.removeLayer(focusMarkerRef.current);
+      focusMarkerRef.current = null;
+    }
+
+    const selectedChanged =
+      previousSelectedDeviceIdRef.current !== (selectedDeviceId || null);
+    previousSelectedDeviceIdRef.current = selectedDeviceId || null;
+
+    if (selectedDevice && selectedChanged) {
+      mapRef.current.flyTo(
+        [selectedDevice.latitude, selectedDevice.longitude],
+        16,
+        { duration: 0.8 }
+      );
+    }
+  }, [focusedPoint, selectedDevice, selectedDeviceId]);
+
+  const recenterMap = () => {
+    if (!mapRef.current) return;
+
+    if (focusedPoint) {
+      mapRef.current.flyTo(
+        [focusedPoint.latitude, focusedPoint.longitude],
+        16,
+        {
+          duration: 0.8,
+        }
+      );
+      return;
+    }
+
+    if (selectedDevice) {
+      mapRef.current.flyTo(
+        [selectedDevice.latitude, selectedDevice.longitude],
+        16,
+        { duration: 0.8 }
+      );
+      return;
+    }
+
+    if (devices.size > 0) {
       const bounds = L.latLngBounds(
         Array.from(devices.values()).map((d) => [d.latitude, d.longitude])
       );
       mapRef.current.fitBounds(bounds, { padding: [50, 50] });
     }
-  }, [devices]);
+  };
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-cyan-500/30">
+      <button
+        onClick={recenterMap}
+        className="absolute right-3 top-3 z-[1000] rounded-md border border-cyan-400/80 bg-zinc-900/90 px-3 py-2 text-xs font-semibold text-cyan-200 shadow-lg transition hover:bg-zinc-800"
+      >
+        Recentrar mapa
+      </button>
       <div
         ref={containerRef}
         style={{ height: "100%", width: "100%" }}

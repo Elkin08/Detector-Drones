@@ -34,7 +34,7 @@ export const LocationProvider = ({
     const socket: Socket = io(socketUrl, {
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: Infinity,
     });
 
     socket.on("connect", () => {
@@ -76,7 +76,10 @@ export const LocationProvider = ({
         const updated = new Map(prev);
         const device = updated.get(deviceId);
         if (device) {
-          device.signalStatus = "lost";
+          updated.set(deviceId, {
+            ...device,
+            signalStatus: "lost",
+          });
         }
         return updated;
       });
@@ -87,7 +90,10 @@ export const LocationProvider = ({
         const updated = new Map(prev);
         const device = updated.get(deviceId);
         if (device) {
-          device.signalStatus = "reconnecting";
+          updated.set(deviceId, {
+            ...device,
+            signalStatus: "reconnecting",
+          });
         }
         return updated;
       });
@@ -98,7 +104,10 @@ export const LocationProvider = ({
         const updated = new Map(prev);
         const device = updated.get(deviceId);
         if (device) {
-          device.signalStatus = "connected";
+          updated.set(deviceId, {
+            ...device,
+            signalStatus: "connected",
+          });
         }
         return updated;
       });
@@ -107,7 +116,14 @@ export const LocationProvider = ({
     socket.on("device:disconnected", (deviceId: string) => {
       setDevices((prev) => {
         const updated = new Map(prev);
-        updated.delete(deviceId);
+        const device = updated.get(deviceId);
+        if (device) {
+          // Conservamos última ubicación para historial y visualización de pérdida.
+          updated.set(deviceId, {
+            ...device,
+            signalStatus: "lost",
+          });
+        }
         return updated;
       });
     });

@@ -2,6 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import Head from "next/head";
 import io, { Socket } from "socket.io-client";
 
+function stableHash(input: string) {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash << 5) - hash + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function getStableDeviceId() {
+  const fingerprint = [
+    navigator.userAgent,
+    navigator.language,
+    navigator.platform,
+    `${window.screen.width}x${window.screen.height}`,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  ].join("|");
+
+  return `device_${stableHash(fingerprint).slice(0, 10)}`;
+}
+
 export default function MobileTracker() {
   const [isConnected, setIsConnected] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
@@ -12,9 +33,26 @@ export default function MobileTracker() {
   const [error, setError] = useState<string>("");
   const [isTracking, setIsTracking] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+
+  // Generar o recuperar ID persistente del dispositivo
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Intentar recuperar del localStorage
+    let id = localStorage.getItem("deviceId");
+    if (!id) {
+      // Si no existe, generar uno estable para evitar duplicados frecuentes
+      id = getStableDeviceId();
+      localStorage.setItem("deviceId", id);
+    }
+    setDeviceId(id);
+  }, []);
 
   // Inicializar conexión WebSocket
   useEffect(() => {
+    if (!deviceId) return;
+
     // Usar la misma URL que la página actual
     const protocol = window.location.protocol === "https:" ? "https:" : "http:";
     const host = window.location.hostname;
@@ -26,21 +64,29 @@ export default function MobileTracker() {
     const socket = io(socketUrl, {
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: Infinity, // Intentar reconectar indefinidamente
     });
 
     socketRef.current = socket;
 
+    // Al conectar, registrar el dispositivo
     socket.on("connect", () => {
-      console.log("Conectado al servidor", socket.id);
+      console.log("✓ Conectado al servidor", socket.id);
       setIsConnected(true);
-      if (deviceId) {
-        socket.emit("device:register", { deviceId });
-      }
+      // Registrar dispositivo automáticamente
+      socket.emit("device:register", { deviceId });
+      console.log("✓ Dispositivo registrado:", deviceId);
     });
 
     socket.on("disconnect", () => {
+      console.log("✗ Desconectado del servidor");
       setIsConnected(false);
+    });
+
+    socket.on("reconnect", () => {
+      console.log("✓ Reconectado al servidor");
+      // Re-registrar después de reconectar
+      socket.emit("device:register", { deviceId });
     });
 
     return () => {
@@ -48,11 +94,20 @@ export default function MobileTracker() {
     };
   }, [deviceId]);
 
-  // Generar ID único del dispositivo
+  // Heartbeat para mantener viva la señal aunque la geolocalización se retrase
   useEffect(() => {
-    const id = `device_${Math.random().toString(36).slice(2, 11)}`;
-    setDeviceId(id);
-  }, []);
+    if (!isTracking || !deviceId) return;
+
+    const interval = window.setInterval(() => {
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit("device:heartbeat", { deviceId });
+      }
+    }, 5000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isTracking, deviceId]);
 
   // Iniciar rastreo de ubicación
   const startTracking = async () => {
@@ -61,17 +116,49 @@ export default function MobileTracker() {
       return;
     }
 
+    if (!socketRef.current || !socketRef.current.connected) {
+      setError(
+        "Sin conexión al servidor. Espera unos segundos e intenta de nuevo."
+      );
+      return;
+    }
+
+    if (isTracking) {
+      stopTracking();
+      return;
+    }
+
     setIsTracking(true);
     setError("");
 
-    // Registrar dispositivo
-    if (socketRef.current && deviceId) {
-      socketRef.current.emit("device:register", { deviceId });
-      setIsConnected(true);
-    }
+    console.log("✓ Iniciando rastreo de ubicación...");
+
+    // Enviar una posición inicial inmediata para sincronizar mapa/radar al primer inicio.
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setLocation({ latitude, longitude });
+
+        if (socketRef.current && deviceId) {
+          socketRef.current.emit("device:location", {
+            deviceId,
+            latitude,
+            longitude,
+          });
+        }
+      },
+      () => {
+        // Si falla el getCurrentPosition, watchPosition sigue intentando.
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 5000,
+      }
+    );
 
     // Iniciar rastreo continuo
-    const watchId = navigator.geolocation.watchPosition(
+    watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         setLocation({ latitude, longitude });
@@ -101,20 +188,30 @@ export default function MobileTracker() {
         timeout: 5000,
       }
     );
-
-    return () => {
-      navigator.geolocation.clearWatch(watchId);
-    };
   };
 
   // Detener rastreo
   const stopTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
     setIsTracking(false);
     setLocation(null);
     if (socketRef.current && deviceId) {
       socketRef.current.emit("device:disconnect_request", { deviceId });
     }
   };
+
+  // Limpieza al desmontar la página
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <>
@@ -127,7 +224,7 @@ export default function MobileTracker() {
         <div className="w-full max-w-md">
           <div className="rounded-3xl border border-cyan-500/25 bg-zinc-950/80 p-6 shadow-[0_0_40px_rgba(34,211,238,0.08)] backdrop-blur">
             <h1 className="text-3xl font-black text-red-500">
-              Rastreador Móvil
+              Simulador de Drones
             </h1>
             <p className="mt-2 text-sm text-zinc-300">
               Transmite tu ubicación GPS en tiempo real
