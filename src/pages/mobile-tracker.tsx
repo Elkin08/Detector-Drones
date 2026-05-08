@@ -2,6 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import Head from "next/head";
 import io, { Socket } from "socket.io-client";
 
+type DroneProfile = {
+  brand: string;
+  model: string;
+  marketName: string;
+  category: string;
+  description: string;
+  estimatedBatteryMinutes: number;
+  specs: string[];
+  color?: string | null;
+};
+
+type AssignedDeviceProfile = {
+  deviceId: string;
+  assignedName: string;
+  status: "connected" | "lost" | "reconnecting";
+  drone: DroneProfile;
+  createdAt: number;
+  lastSeenAt: number;
+  batteryLevel?: number | null;
+  batteryCharging?: boolean | null;
+};
+
+type BatterySnapshot = {
+  level: number;
+  charging: boolean;
+} | null;
+
 function stableHash(input: string) {
   let hash = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -26,14 +53,106 @@ function getStableDeviceId() {
 export default function MobileTracker() {
   const [isConnected, setIsConnected] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
+  const [deviceProfile, setDeviceProfile] =
+    useState<AssignedDeviceProfile | null>(null);
   const [location, setLocation] = useState<{
     latitude: number;
     longitude: number;
   } | null>(null);
+  const [batterySnapshot, setBatterySnapshot] = useState<BatterySnapshot>(null);
   const [error, setError] = useState<string>("");
   const [isTracking, setIsTracking] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const batterySnapshotRef = useRef<BatterySnapshot>(null);
+
+  useEffect(() => {
+    batterySnapshotRef.current = batterySnapshot;
+  }, [batterySnapshot]);
+
+  const getBatteryPayload = () => {
+    const currentSnapshot = batterySnapshotRef.current;
+
+    if (!currentSnapshot) {
+      return {};
+    }
+
+    return {
+      batteryLevel: Math.min(
+        100,
+        Math.max(0, Math.round(currentSnapshot.level * 100))
+      ),
+      batteryCharging: currentSnapshot.charging,
+    };
+  };
+
+  const syncBatterySnapshot = async () => {
+    if (typeof navigator === "undefined") {
+      return;
+    }
+
+    const batteryApi = (
+      navigator as Navigator & {
+        getBattery?: () => Promise<{
+          level: number;
+          charging: boolean;
+          addEventListener?: (event: string, handler: () => void) => void;
+        }>;
+      }
+    ).getBattery;
+
+    if (!batteryApi) {
+      setBatterySnapshot(null);
+      return;
+    }
+
+    try {
+      const battery = await batteryApi();
+      const updateSnapshot = () => {
+        setBatterySnapshot({
+          level: battery.level,
+          charging: battery.charging,
+        });
+      };
+
+      updateSnapshot();
+      battery.addEventListener?.("levelchange", updateSnapshot);
+      battery.addEventListener?.("chargingchange", updateSnapshot);
+    } catch (error) {
+      console.warn("No se pudo leer la batería del dispositivo", error);
+      setBatterySnapshot(null);
+    }
+  };
+
+  const syncDeviceProfile = async (currentDeviceId: string) => {
+    try {
+      const response = await fetch("/api/devices/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          deviceId: currentDeviceId,
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          language: navigator.language,
+          ...getBatteryPayload(),
+        }),
+      });
+
+      const payload = (await response.json()) as {
+        ok: boolean;
+        device?: AssignedDeviceProfile;
+      };
+
+      if (response.ok && payload.ok && payload.device) {
+        setDeviceProfile(payload.device);
+        setDeviceId(payload.device.deviceId);
+      }
+    } catch (error) {
+      console.warn("No se pudo sincronizar el perfil del dispositivo", error);
+    }
+  };
 
   // Generar o recuperar ID persistente del dispositivo
   useEffect(() => {
@@ -74,7 +193,8 @@ export default function MobileTracker() {
       console.log("✓ Conectado al servidor", socket.id);
       setIsConnected(true);
       // Registrar dispositivo automáticamente
-      socket.emit("device:register", { deviceId });
+      socket.emit("device:register", { deviceId, ...getBatteryPayload() });
+      void syncDeviceProfile(deviceId);
       console.log("✓ Dispositivo registrado:", deviceId);
     });
 
@@ -86,7 +206,12 @@ export default function MobileTracker() {
     socket.on("reconnect", () => {
       console.log("✓ Reconectado al servidor");
       // Re-registrar después de reconectar
-      socket.emit("device:register", { deviceId });
+      socket.emit("device:register", { deviceId, ...getBatteryPayload() });
+      void syncDeviceProfile(deviceId);
+    });
+
+    socket.on("device:profile", (profile: AssignedDeviceProfile) => {
+      setDeviceProfile(profile);
     });
 
     return () => {
@@ -94,13 +219,20 @@ export default function MobileTracker() {
     };
   }, [deviceId]);
 
+  useEffect(() => {
+    void syncBatterySnapshot();
+  }, []);
+
   // Heartbeat para mantener viva la señal aunque la geolocalización se retrase
   useEffect(() => {
     if (!isTracking || !deviceId) return;
 
     const interval = window.setInterval(() => {
       if (socketRef.current && socketRef.current.connected) {
-        socketRef.current.emit("device:heartbeat", { deviceId });
+        socketRef.current.emit("device:heartbeat", {
+          deviceId,
+          ...getBatteryPayload(),
+        });
       }
     }, 5000);
 
@@ -239,6 +371,86 @@ export default function MobileTracker() {
                 {deviceId}
               </p>
             </div>
+
+            {deviceProfile && (
+              <div className="mt-4 rounded-lg border border-fuchsia-400/30 bg-fuchsia-950/20 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-fuchsia-300">
+                  Modelo Detectado
+                </p>
+                <p className="mt-2 text-lg font-bold text-white">
+                  {deviceProfile.assignedName}
+                </p>
+                <p className="text-sm text-zinc-300">
+                  {deviceProfile.drone.marketName} · {deviceProfile.drone.model}
+                </p>
+
+                <p className="mt-2 text-sm text-zinc-300">
+                  {deviceProfile.drone.description}
+                </p>
+
+                <div className="mt-3 rounded-lg border border-cyan-400/30 bg-zinc-900/50 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">
+                    Batería
+                  </p>
+                  {(() => {
+                    // Mostrar la batería real del celular si está disponible en el snapshot local,
+                    // si no, caer en la última batería reportada por el servidor.
+                    const snapshot = batterySnapshot;
+                    const snapshotPercent =
+                      snapshot && typeof snapshot.level === "number"
+                        ? Math.min(
+                            100,
+                            Math.max(0, Math.round(snapshot.level * 100))
+                          )
+                        : null;
+
+                    const displayLevel =
+                      snapshotPercent ?? deviceProfile.batteryLevel ?? null;
+
+                    if (typeof displayLevel === "number") {
+                      return (
+                        <p className="mt-2 text-sm text-zinc-200">
+                          Nivel real detectado: {displayLevel}%
+                          {(snapshot && snapshot.charging) ||
+                          deviceProfile.batteryCharging
+                            ? " (cargando)"
+                            : ""}
+                        </p>
+                      );
+                    }
+
+                    return (
+                      <p className="mt-2 text-sm text-zinc-200">
+                        Estimación del modelo: ~
+                        {deviceProfile.drone.estimatedBatteryMinutes} min de
+                        vuelo
+                      </p>
+                    );
+                  })()}
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Categoría: {deviceProfile.drone.category}
+                  </p>
+                </div>
+
+                <div className="mt-3 text-sm text-zinc-200">
+                  <p className="font-medium text-cyan-200">Especificaciones</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-zinc-300">
+                    {deviceProfile.drone.specs.map((spec) => (
+                      <li key={spec}>{spec}</li>
+                    ))}
+                  </ul>
+
+                  {deviceProfile.drone.color && (
+                    <p className="mt-3 text-zinc-300">
+                      Color:{" "}
+                      <span className="text-white">
+                        {deviceProfile.drone.color}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Estado de Conexión */}
             <div className="mt-4 flex items-center gap-2">

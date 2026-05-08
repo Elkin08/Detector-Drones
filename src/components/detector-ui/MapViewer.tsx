@@ -50,6 +50,53 @@ export const MapViewer = ({
     return devices.get(selectedDeviceId) || null;
   }, [devices, selectedDeviceId]);
 
+  const getDeviceLabel = (device: typeof selectedDevice, fallback: string) => {
+    if (!device) {
+      return fallback;
+    }
+
+    if (device.drone?.marketName && device.drone?.model) {
+      return `${device.drone.marketName} ${device.drone.model}`;
+    }
+
+    if (device.assignedName) {
+      return device.assignedName;
+    }
+
+    return fallback;
+  };
+
+  const getBatteryLabel = (device: typeof selectedDevice) => {
+    if (!device) {
+      return "Batería: no disponible";
+    }
+
+    if (typeof device.batteryLevel === "number") {
+      return `Batería: ${device.batteryLevel}%${device.batteryCharging ? " (cargando)" : ""}`;
+    }
+
+    return "Batería: no disponible";
+  };
+
+  const buildPopupContent = (device: typeof selectedDevice, color: string) => {
+    if (!device) {
+      return "";
+    }
+
+    const modelLabel = getDeviceLabel(device, `ID ${device.id.slice(0, 8)}`);
+    const batteryLabel = getBatteryLabel(device);
+
+    return `<div style="font-family: monospace;">
+      <strong>${modelLabel}</strong><br/>
+      Lat: ${device.latitude.toFixed(6)}<br/>
+      Lng: ${device.longitude.toFixed(6)}<br/>
+      Estado: <span style="color: ${color}; font-weight: bold;">${device.signalStatus}</span>
+      <br/>${batteryLabel}
+      ${device.drone?.description ? `<br/>${device.drone.description}` : ""}
+      ${typeof device.drone?.estimatedBatteryMinutes === "number" ? `<br/>Autonomía estimada: ~${device.drone.estimatedBatteryMinutes} min` : ""}
+    </div>`;
+  };
+
   // Inicializar mapa
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -109,6 +156,10 @@ export const MapViewer = ({
     // Agregar o actualizar marcadores, círculos y recorridos
     devices.forEach((device) => {
       const existingMarker = markersRef.current.get(device.id);
+      const modelLabel = getDeviceLabel(
+        device,
+        `Dispositivo ${device.id.slice(0, 8)}`
+      );
 
       // Color basado en estado de señal
       const color =
@@ -147,19 +198,14 @@ export const MapViewer = ({
         // Actualizar posición
         existingMarker.setLatLng([device.latitude, device.longitude]);
         existingMarker.setIcon(icon);
+        existingMarker.setPopupContent(buildPopupContent(device, color));
       } else {
         // Crear nuevo marcador
+
         const marker = L.marker([device.latitude, device.longitude], {
           icon,
         })
-          .bindPopup(
-            `<div style="font-family: monospace;">
-              <strong>Dron ${device.id.slice(0, 8)}</strong><br/>
-              Lat: ${device.latitude.toFixed(6)}<br/>
-              Lng: ${device.longitude.toFixed(6)}<br/>
-              Estado: <span style="color: ${color}; font-weight: bold;">${device.signalStatus}</span>
-            </div>`
-          )
+          .bindPopup(buildPopupContent(device, color))
           .addTo(mapRef.current!);
 
         markersRef.current.set(device.id, marker);

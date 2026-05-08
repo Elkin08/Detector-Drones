@@ -66,7 +66,66 @@ export const LocationProvider = ({
           signalStatus: "connected",
           positionHistory,
           detectionTime: existingDevice?.detectionTime || data.timestamp,
+          assignedName: data.assignedName ?? existingDevice?.assignedName,
+          drone: data.drone ?? existingDevice?.drone,
+          batteryLevel:
+            typeof data.batteryLevel === "number"
+              ? data.batteryLevel
+              : (existingDevice?.batteryLevel ?? null),
+          batteryCharging:
+            typeof data.batteryCharging === "boolean"
+              ? data.batteryCharging
+              : (existingDevice?.batteryCharging ?? null),
         });
+        return updated;
+      });
+    });
+
+    // Recibir perfil (asignación y batería) desde el servidor en tiempo real
+    socket.on("device:profile", (profile: any) => {
+      setDevices((prev) => {
+        const updated = new Map(prev);
+        const existing = updated.get(profile.deviceId);
+
+        if (existing) {
+          updated.set(profile.deviceId, {
+            ...existing,
+            // no sobrescribimos ubicación a menos que venga explícita
+            assignedName: profile.assignedName || existing.assignedName,
+            drone: profile.drone || existing.drone,
+            batteryLevel:
+              typeof profile.batteryLevel === "number"
+                ? profile.batteryLevel
+                : (existing.batteryLevel ?? null),
+            batteryCharging:
+              typeof profile.batteryCharging === "boolean"
+                ? profile.batteryCharging
+                : (existing.batteryCharging ?? null),
+          });
+        } else {
+          // Si aún no existe ubicación, creamos un placeholder mínimo
+          updated.set(profile.deviceId, {
+            id: profile.deviceId,
+            latitude: profile.latitude ?? 0,
+            longitude: profile.longitude ?? 0,
+            timestamp: profile.lastSeenAt || Date.now(),
+            signalStatus:
+              profile.status === "connected" ? "connected" : "connected",
+            positionHistory: [],
+            detectionTime: profile.createdAt || Date.now(),
+            assignedName: profile.assignedName || null,
+            drone: profile.drone || null,
+            batteryLevel:
+              typeof profile.batteryLevel === "number"
+                ? profile.batteryLevel
+                : null,
+            batteryCharging:
+              typeof profile.batteryCharging === "boolean"
+                ? profile.batteryCharging
+                : null,
+          });
+        }
+
         return updated;
       });
     });

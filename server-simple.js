@@ -1,6 +1,7 @@
 const { createServer } = require("http");
 const { parse } = require("url");
 const next = require("next");
+const { registerDevice, touchDevice } = require("./device-registry");
 
 const dev = process.env.NODE_ENV !== "production";
 const nextApp = next({ dev });
@@ -33,15 +34,57 @@ nextApp
       console.log(`[WS] Nuevo cliente: ${socket.id}`);
 
       socket.on("device:register", (data) => {
-        const { deviceId } = data;
+        const { deviceId, batteryLevel, batteryCharging } = data || {};
+        if (!deviceId) return;
         console.log(`[WS] Dispositivo registrado: ${deviceId}`);
+
+        const deviceRecord = registerDevice({
+          deviceId,
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+          batteryLevel,
+          batteryCharging,
+        });
 
         connectedDevices.set(deviceId, {
           socketId: socket.id,
           lastUpdate: Date.now(),
+          assignedName: deviceRecord.assignedName,
+          drone: deviceRecord.drone,
         });
 
         io.emit("device:connected", deviceId);
+        socket.emit("device:profile", deviceRecord);
+
+        if (signalTimeouts.has(deviceId)) {
+          clearTimeout(signalTimeouts.get(deviceId));
+        }
+      });
+
+      socket.on("device:heartbeat", (data) => {
+        const { deviceId, batteryLevel, batteryCharging } = data || {};
+        if (!deviceId) return;
+
+        touchDevice(deviceId, {
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+          batteryLevel,
+          batteryCharging,
+        });
+
+        // Emitir perfil actualizado para que el panel reciba batería en tiempo real
+        try {
+          const updated = require("./device-registry").getDevice(deviceId);
+          if (updated) {
+            io.emit("device:profile", updated);
+          }
+        } catch (err) {
+          console.warn("No se pudo emitir perfil actualizado:", err);
+        }
 
         if (signalTimeouts.has(deviceId)) {
           clearTimeout(signalTimeouts.get(deviceId));
@@ -51,6 +94,13 @@ nextApp
       socket.on("device:location", (data) => {
         const { deviceId, latitude, longitude } = data;
         const timestamp = Date.now();
+
+        const deviceRecord = touchDevice(deviceId, {
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+        });
 
         const devInfo = connectedDevices.get(deviceId);
         if (devInfo) {
@@ -66,6 +116,10 @@ nextApp
           latitude,
           longitude,
           timestamp,
+          assignedName: deviceRecord?.assignedName || null,
+          drone: deviceRecord?.drone || null,
+          batteryLevel: deviceRecord?.batteryLevel ?? null,
+          batteryCharging: deviceRecord?.batteryCharging ?? null,
         });
 
         const timeout = setTimeout(() => {

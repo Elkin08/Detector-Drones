@@ -24,6 +24,18 @@ type FocusPoint = {
   label?: string;
 };
 
+function formatDeviceModel(device: Device) {
+  if (device.drone?.marketName && device.drone?.model) {
+    return `${device.drone.marketName} ${device.drone.model}`;
+  }
+
+  if (device.assignedName) {
+    return device.assignedName;
+  }
+
+  return `ID ${device.id.slice(0, 8)}`;
+}
+
 export const MissionExperience = () => {
   const [view, setView] = useState<View>("home");
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
@@ -58,8 +70,8 @@ export const MissionExperience = () => {
 
   const deviceAliases = useMemo(() => {
     const aliases = new Map<string, string>();
-    sortedDevices.forEach((device, idx) => {
-      aliases.set(device.id, `Dron ${idx + 1}`);
+    sortedDevices.forEach((device) => {
+      aliases.set(device.id, formatDeviceModel(device));
     });
     return aliases;
   }, [sortedDevices]);
@@ -68,6 +80,10 @@ export const MissionExperience = () => {
     selectedDeviceId && !selectedDeviceId.startsWith("__")
       ? devices.get(selectedDeviceId) || null
       : null;
+
+  const selectedDeviceLabel = selectedDevice
+    ? formatDeviceModel(selectedDevice)
+    : null;
 
   const getRealtimeDeviceId = () => {
     const connectedDevice = sortedDevices.find(
@@ -507,6 +523,41 @@ export const MissionExperience = () => {
                         </motion.div>
                       ))
                     )}
+                  </div>
+                )}
+
+                {selectedDevice && selectedDeviceId !== "__history" && (
+                  <div className="mt-4 rounded-xl border border-cyan-400/25 bg-zinc-900/60 p-4 text-xs text-zinc-200">
+                    <p className="text-[11px] uppercase tracking-[0.25em] text-cyan-300">
+                      Modelo detectado
+                    </p>
+                    <p className="mt-2 text-base font-bold text-white">
+                      {selectedDeviceLabel}
+                    </p>
+                    {selectedDevice.drone?.description && (
+                      <p className="mt-2 text-zinc-300">
+                        {selectedDevice.drone.description}
+                      </p>
+                    )}
+                    <div className="mt-3 grid gap-2 text-zinc-300">
+                      {selectedDevice.drone?.estimatedBatteryMinutes && (
+                        <p>
+                          Autonomía estimada: ~
+                          {selectedDevice.drone.estimatedBatteryMinutes} min de
+                          vuelo
+                        </p>
+                      )}
+                      {selectedDevice.drone?.category && (
+                        <p>Categoría: {selectedDevice.drone.category}</p>
+                      )}
+                    </div>
+                    {selectedDevice.drone?.specs?.length ? (
+                      <ul className="mt-3 list-disc space-y-1 pl-5 text-zinc-300">
+                        {selectedDevice.drone.specs.map((spec) => (
+                          <li key={spec}>{spec}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 )}
               </div>

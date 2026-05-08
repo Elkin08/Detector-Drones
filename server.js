@@ -3,6 +3,13 @@ const https = require("https");
 const os = require("os");
 const { parse } = require("url");
 const next = require("next");
+const {
+  markDeviceConnected,
+  markDeviceDisconnected,
+  markDeviceReconnecting,
+  registerDevice,
+  touchDevice,
+} = require("./device-registry");
 
 const dev = process.env.NODE_ENV !== "production";
 const nextApp = next({ dev });
@@ -93,10 +100,20 @@ nextApp
       console.log(`[WS] Nuevo cliente: ${socket.id}`);
 
       socket.on("device:register", (data) => {
-        const { deviceId } = data;
+        const { deviceId, batteryLevel, batteryCharging } = data;
         if (!deviceId) return;
 
         console.log(`[WS] Dispositivo registrado: ${deviceId}`);
+
+        const deviceRecord = registerDevice({
+          deviceId,
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+          batteryLevel,
+          batteryCharging,
+        });
 
         if (disconnectGraceTimeouts.has(deviceId)) {
           clearTimeout(disconnectGraceTimeouts.get(deviceId));
@@ -106,20 +123,32 @@ nextApp
         connectedDevices.set(deviceId, {
           socketId: socket.id,
           lastUpdate: Date.now(),
+          assignedName: deviceRecord.assignedName,
+          drone: deviceRecord.drone,
         });
 
         io.emit("device:connected", deviceId);
+        socket.emit("device:profile", deviceRecord);
         refreshSignalTimeout(io, deviceId);
       });
 
       socket.on("device:heartbeat", (data) => {
-        const { deviceId } = data || {};
+        const { deviceId, batteryLevel, batteryCharging } = data || {};
         if (!deviceId) return;
 
         const devInfo = connectedDevices.get(deviceId);
         if (devInfo) {
           devInfo.lastUpdate = Date.now();
         }
+
+        touchDevice(deviceId, {
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+          batteryLevel,
+          batteryCharging,
+        });
 
         refreshSignalTimeout(io, deviceId);
       });
@@ -129,6 +158,13 @@ nextApp
         if (!deviceId) return;
 
         const timestamp = Date.now();
+
+        const deviceRecord = touchDevice(deviceId, {
+          userAgent: socket.handshake.headers["user-agent"] || "",
+          platform: socket.handshake.headers["sec-ch-ua-platform"] || "",
+          language: socket.handshake.headers["accept-language"] || "",
+          ip: socket.handshake.address || "",
+        });
 
         const devInfo = connectedDevices.get(deviceId);
         if (devInfo) {
@@ -146,6 +182,10 @@ nextApp
           latitude,
           longitude,
           timestamp,
+          assignedName: deviceRecord?.assignedName || null,
+          drone: deviceRecord?.drone || null,
+          batteryLevel: deviceRecord?.batteryLevel ?? null,
+          batteryCharging: deviceRecord?.batteryCharging ?? null,
         });
 
         refreshSignalTimeout(io, deviceId);
@@ -157,6 +197,7 @@ nextApp
 
         connectedDevices.delete(deviceId);
         clearDeviceTimeouts(deviceId);
+        markDeviceDisconnected(deviceId);
         io.emit("device:disconnected", deviceId);
       });
 
@@ -165,6 +206,7 @@ nextApp
         for (const [deviceId, devInfo] of connectedDevices.entries()) {
           if (devInfo.socketId === socket.id) {
             io.emit("device:signal_reconnecting", deviceId);
+            markDeviceReconnecting(deviceId);
 
             if (disconnectGraceTimeouts.has(deviceId)) {
               clearTimeout(disconnectGraceTimeouts.get(deviceId));
@@ -175,6 +217,7 @@ nextApp
               if (current && current.socketId === socket.id) {
                 connectedDevices.delete(deviceId);
                 clearDeviceTimeouts(deviceId);
+                markDeviceDisconnected(deviceId);
                 io.emit("device:disconnected", deviceId);
               }
             }, DISCONNECT_GRACE_MS);
