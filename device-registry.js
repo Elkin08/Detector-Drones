@@ -52,7 +52,7 @@ const droneCatalog = [
     model: "EVO Lite+",
     category: "Prosumidor",
     description:
-      "Dron con un gran sensor de 1 pulgada, apertura ajustable y capacidad de grabar videos impresionantes en resolución 6K.",
+      "Dron con un gran sensor de 1 pulgada, apertura ajustable y capacidad de grabar videos impresionantes en resolución 6k.",
     estimatedBatteryMinutes: 40,
   },
   {
